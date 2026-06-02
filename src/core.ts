@@ -68,11 +68,21 @@ export function toOesFeedbackKind(shellKind: string): OesFeedbackKind {
 export function createOesFeedbackClient(
   config: OesFeedbackClientConfig,
 ): (report: FiledReport) => Promise<OesFeedbackResult> {
-  const { oesBaseUrl, dashboardSecret, appSlug, fetchImpl = fetch, log } = config;
-  const endpoint = `${oesBaseUrl.replace(/\/+$/, '')}/api/oes/feedback`;
+  const { oesBaseUrl, dashboardSecret, appSlug, fetchImpl, log } = config;
 
   return async function fileReportToOes(report: FiledReport): Promise<OesFeedbackResult> {
-    const res = await fetchImpl(endpoint, {
+    // Validate + build the endpoint LAZILY (at call time, not factory time) so
+    // constructing this adapter at module load with unset env never crashes a
+    // build — `next build` collects pages with env unset, and an eager
+    // `oesBaseUrl.replace()` there throws "Cannot read properties of undefined".
+    // It now fails loudly only when a report is actually filed.
+    if (!oesBaseUrl || !dashboardSecret) {
+      throw new Error(
+        'OES feedback sink not configured: set OES_BASE_URL and OES_DASHBOARD_SECRET',
+      );
+    }
+    const endpoint = `${oesBaseUrl.replace(/\/+$/, '')}/api/oes/feedback`;
+    const res = await (fetchImpl ?? fetch)(endpoint, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
