@@ -145,6 +145,35 @@ describe('createOesFeedbackClient', () => {
     await expect(onFileReport(f)).resolves.toBeUndefined();
     expect(JSON.parse(fetchImpl.mock.calls[0]![1]!.body as string).kind).toBe('idea');
   });
+
+  it('sends multipart (payload + screenshot file) when a screenshot is attached', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, feedback_id: 'fb-2', app_slug: 'makeros', kind: 'bug', status: 'new' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const onFileReport = createFileReportAction({
+      oesBaseUrl: 'https://oes.example.com',
+      dashboardSecret: 'x',
+      appSlug: 'makeros',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const f = new FormData();
+    f.set('title', 't');
+    f.set('description', 'd');
+    f.set('kind', 'bug');
+    f.append('screenshot', new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), 'screenshot.png');
+    await expect(onFileReport(f)).resolves.toBeUndefined();
+
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.body).toBeInstanceOf(FormData);
+    const sent = init.body as FormData;
+    expect(JSON.parse(sent.get('payload') as string)).toMatchObject({ appSlug: 'makeros', kind: 'bug' });
+    expect(sent.get('screenshot')).toBeInstanceOf(Blob);
+    // multipart: must NOT set content-type manually (fetch adds the boundary)
+    expect((init.headers as Record<string, string>)['content-type']).toBeUndefined();
+  });
 });
 
 describe('migrations + theme exports', () => {
