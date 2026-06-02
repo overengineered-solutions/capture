@@ -33,6 +33,13 @@ export type FiledReport = {
   description: string;
   kind: OesFeedbackKind;
   context?: Record<string, unknown> | null;
+  /**
+   * Optional screenshot (PNG). When present the report is sent as
+   * multipart/form-data so the binary rides alongside the JSON payload — it's
+   * far too big for the context jsonb. OES uploads it to storage and stamps
+   * `screenshot_url` on the row.
+   */
+  screenshot?: Blob | null;
 };
 
 export type OesFeedbackResult = {
@@ -82,20 +89,30 @@ export function createOesFeedbackClient(
       );
     }
     const endpoint = `${oesBaseUrl.replace(/\/+$/, '')}/api/oes/feedback`;
-    const res = await (fetchImpl ?? fetch)(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${dashboardSecret}`,
-      },
-      body: JSON.stringify({
-        appSlug,
-        title: report.title,
-        description: report.description,
-        kind: report.kind,
-        context: report.context ?? null,
-      }),
-    });
+    const payload = {
+      appSlug,
+      title: report.title,
+      description: report.description,
+      kind: report.kind,
+      context: report.context ?? null,
+    };
+
+    // With a screenshot → multipart (the JSON as a `payload` part + the image as
+    // a `screenshot` file part); without → plain JSON (unchanged path). Don't set
+    // content-type for multipart — fetch must add the boundary itself.
+    const headers: Record<string, string> = { authorization: `Bearer ${dashboardSecret}` };
+    let body: BodyInit;
+    if (report.screenshot) {
+      const form = new FormData();
+      form.set('payload', JSON.stringify(payload));
+      form.append('screenshot', report.screenshot, 'screenshot.png');
+      body = form;
+    } else {
+      headers['content-type'] = 'application/json';
+      body = JSON.stringify(payload);
+    }
+
+    const res = await (fetchImpl ?? fetch)(endpoint, { method: 'POST', headers, body });
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
@@ -155,7 +172,11 @@ export function parseReportFormData(fd: FormData): FiledReport {
     context['workspaceId'] = workspaceId;
   }
 
-  return { title, description, kind, context };
+  // The shell appends an opt-in screenshot as a Blob/File under `screenshot`.
+  const shot = fd.get('screenshot');
+  const screenshot = shot instanceof Blob ? shot : null;
+
+  return { title, description, kind, context, screenshot };
 }
 
 /**

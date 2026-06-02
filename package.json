@@ -1,6 +1,6 @@
 {
   "name": "@overengineered-solutions/capture",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "The standardized CaptureBubble — the bottom-right feedback/helper widget (AI helper · AI-distilled todo · bug report · feature request) as one adapter-injected SSOT, collapsing the portfolio's copy-paste forks into a version-bumped package",
   "license": "MIT",
   "type": "module",
@@ -47,6 +47,36 @@
         "types": "./dist/cjs/theme.d.ts",
         "default": "./dist/cjs/theme.js"
       }
+    },
+    "./styles": {
+      "import": {
+        "types": "./dist/esm/styles.d.ts",
+        "default": "./dist/esm/styles.js"
+      },
+      "require": {
+        "types": "./dist/cjs/styles.d.ts",
+        "default": "./dist/cjs/styles.js"
+      }
+    },
+    "./diagnostics": {
+      "import": {
+        "types": "./dist/esm/diagnostics.d.ts",
+        "default": "./dist/esm/diagnostics.js"
+      },
+      "require": {
+        "types": "./dist/cjs/diagnostics.d.ts",
+        "default": "./dist/cjs/diagnostics.js"
+      }
+    },
+    "./screenshot": {
+      "import": {
+        "types": "./dist/esm/screenshot.d.ts",
+        "default": "./dist/esm/screenshot.js"
+      },
+      "require": {
+        "types": "./dist/cjs/screenshot.d.ts",
+        "default": "./dist/cjs/screenshot.js"
+      }
     }
   },
   "files": [
@@ -77,6 +107,9 @@
   "homepage": "https://github.com/overengineered-solutions/capture#readme",
   "bugs": {
     "url": "https://github.com/overengineered-solutions/capture/issues"
+  },
+  "dependencies": {
+    "modern-screenshot": "^4.7.0"
   },
   "peerDependencies": {
     "react": ">=18",

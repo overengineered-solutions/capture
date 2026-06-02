@@ -10,7 +10,13 @@ import {
   BUG_REPORTS_TABLE_SQL,
   TODOS_TABLE_SQL,
 } from '../src/migrations';
-import { CAPTURE_DESIGN_TOKENS, captureThemeCss } from '../src/theme';
+import {
+  CAPTURE_DESIGN_TOKENS,
+  captureThemeCss,
+  CAPTURE_THEME_VARS,
+  CAPTURE_STYLES_CSS,
+  CAPTURE_THEME_DEFAULTS_CSS,
+} from '../src/theme';
 
 describe('toOesFeedbackKind', () => {
   it('maps the shell "feature" to OES "idea", everything else to "bug"', () => {
@@ -139,6 +145,35 @@ describe('createOesFeedbackClient', () => {
     await expect(onFileReport(f)).resolves.toBeUndefined();
     expect(JSON.parse(fetchImpl.mock.calls[0]![1]!.body as string).kind).toBe('idea');
   });
+
+  it('sends multipart (payload + screenshot file) when a screenshot is attached', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, feedback_id: 'fb-2', app_slug: 'makeros', kind: 'bug', status: 'new' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const onFileReport = createFileReportAction({
+      oesBaseUrl: 'https://oes.example.com',
+      dashboardSecret: 'x',
+      appSlug: 'makeros',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const f = new FormData();
+    f.set('title', 't');
+    f.set('description', 'd');
+    f.set('kind', 'bug');
+    f.append('screenshot', new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), 'screenshot.png');
+    await expect(onFileReport(f)).resolves.toBeUndefined();
+
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.body).toBeInstanceOf(FormData);
+    const sent = init.body as FormData;
+    expect(JSON.parse(sent.get('payload') as string)).toMatchObject({ appSlug: 'makeros', kind: 'bug' });
+    expect(sent.get('screenshot')).toBeInstanceOf(Blob);
+    // multipart: must NOT set content-type manually (fetch adds the boundary)
+    expect((init.headers as Record<string, string>)['content-type']).toBeUndefined();
+  });
 });
 
 describe('migrations + theme exports', () => {
@@ -148,8 +183,21 @@ describe('migrations + theme exports', () => {
     expect(CAPTURE_LOCAL_MIRROR_SQL).toContain('set_updated_at');
   });
 
-  it('document the design-token contract', () => {
+  it('document the design-token contract (legacy back-compat exports)', () => {
+    // v0.1.x consumers imported these; retained so a bump doesn't break a build.
     expect(CAPTURE_DESIGN_TOKENS).toContain('bg-surface-raised');
-    expect(captureThemeCss).toContain('--color-accent');
+    // captureThemeCss now seeds the --oescap-* defaults instead of Tailwind tokens.
+    expect(captureThemeCss).toContain('--oescap-accent');
+  });
+
+  it('ships the CSS-var theming contract (v0.2.0 SSOT)', () => {
+    // The light-blue accent default IS the OES look.
+    expect(CAPTURE_THEME_VARS['--oescap-accent']).toBe('#38bdf8');
+    expect(CAPTURE_THEME_VARS['--oescap-accent-contrast']).toBeTruthy();
+    // The injected stylesheet bakes in the defaults + the FAB + the redaction rule.
+    expect(CAPTURE_THEME_DEFAULTS_CSS).toContain('--oescap-accent: #38bdf8');
+    expect(CAPTURE_STYLES_CSS).toContain('.oescap-fab');
+    expect(CAPTURE_STYLES_CSS).toContain('@keyframes oescap-bubble-grow');
+    expect(CAPTURE_STYLES_CSS).toContain('.oescap-redacting');
   });
 });
