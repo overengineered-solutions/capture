@@ -101,6 +101,24 @@ describe('createOesFeedbackClient', () => {
     await expect(client({ title: 't', description: 'd', kind: 'bug' })).rejects.toThrow(/401/);
   });
 
+  it('is lazy: constructing with unset config does NOT throw at factory time (module-load/build safe); only filing throws', () => {
+    // A `next build` collects pages with env unset; an eager oesBaseUrl.replace()
+    // there crashes the build. The factory must defer all config use to call time.
+    const make = () =>
+      createFileReportAction({
+        oesBaseUrl: undefined as unknown as string,
+        dashboardSecret: undefined as unknown as string,
+        appSlug: 'x',
+      });
+    expect(make).not.toThrow();
+    const onFileReport = make();
+    const f = new FormData();
+    f.set('title', 't');
+    f.set('description', 'd');
+    f.set('kind', 'bug');
+    return expect(onFileReport(f)).rejects.toThrow(/not configured/);
+  });
+
   it('createFileReportAction returns a FormData-shaped adapter', async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(JSON.stringify({ ok: true, feedback_id: 'fb-1', app_slug: 'primopicks', kind: 'idea', status: 'new' }), {
