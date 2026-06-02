@@ -1,6 +1,6 @@
 {
   "name": "@overengineered-solutions/capture",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The standardized CaptureBubble — the bottom-right feedback/helper widget (AI helper · AI-distilled todo · bug report · feature request) as one adapter-injected SSOT, collapsing the portfolio's copy-paste forks into a version-bumped package",
   "license": "MIT",
   "type": "module",

@@ -180,6 +180,21 @@ export function CaptureBubble({
   const [toast, setToast] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
+  // Reconcile `active` whenever the visible tab set changes (host toggles
+  // `enabledTabs`, or `aiTab` arrives/leaves after an async role/flag resolve).
+  // Without this, `active` keeps pointing at a tab that is no longer rendered,
+  // so the strip shows no active highlight and the body renders a panel for a
+  // now-hidden tab (or, for the AI tab, nothing at all). Snap back to tabs[0].
+  const tabsKey = tabs.join(',');
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.includes(active)) {
+      setActive(tabs[0]!);
+    }
+    // `tabsKey` captures the enabled-tab set; `active` so a manual switch to a
+    // still-valid tab doesn't get clobbered.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabsKey, active]);
+
   // Toast / ack auto-dismiss.
   useEffect(() => {
     if (!toast) return;
@@ -394,9 +409,17 @@ function ModalShell({
         return;
       }
       if (e.key !== 'Tab' || !panel) return;
-      const focusable = panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
-      );
+      // Exclude non-focusable inputs explicitly: `input[type=hidden]` and any
+      // `[disabled]` control still match a bare `input`/`textarea`/`select`
+      // selector, and the bug/feature panel emits 5+ hidden inputs. If one
+      // landed as `first`/`last`, the Tab-wrap `.focus()` would be a silent
+      // no-op and the trap would leak. Then drop anything with no layout box
+      // (display:none / detached) so the wrap target is always truly focusable.
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.getClientRects().length > 0);
       if (focusable.length === 0) return;
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
