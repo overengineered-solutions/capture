@@ -772,7 +772,7 @@ function BugOrFeaturePanel({
               disabled={shotPending}
               className="oescap-btn oescap-shot__btn"
             >
-              {shotPending ? 'Capturing…' : 'Attach screenshot'}
+              {shotPending ? 'Capturing…' : '📷 Add a screenshot?'}
             </button>
           )}
           <p className="oescap-shot__hint">
