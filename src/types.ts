@@ -28,6 +28,12 @@ export type CapturedContext = {
     route: Record<string, unknown>;
     search: Record<string, string>;
     kind: ReportKind;
+    /**
+     * v0.2.0 auto-diagnostics, serialized into `captured_params` (byte-clamped).
+     * `browser` is a snapshot of the environment; `recentErrors` is the capped
+     * ring buffer of recent runtime errors (empty for feature reports).
+     */
+    diagnostics?: { browser: unknown; recentErrors: unknown[] };
   };
   /** The deployed commit SHA, or '' when unknown. */
   capturedCommitSha: string;
@@ -108,4 +114,29 @@ export type CaptureBubbleProps = {
   reportListHref?: string;
   /** Override the success message a filed report shows. */
   reportSuccessCopy?: (kind: ReportKind) => string;
+
+  // --- v0.2.0: auto-diagnostics ---
+  /**
+   * Auto-diagnostics control. The bubble installs a module-level error ring
+   * buffer (window.onerror / 'error' / 'unhandledrejection') and stamps a
+   * `browser` snapshot + `recentErrors` into every report's captured context.
+   *  - `enabled` (default true) — turn the whole feature off.
+   *  - `hookConsoleError` (default false) — also mirror `console.error` calls
+   *    into the ring buffer (the original console output is preserved).
+   * The serialized diagnostics are byte-clamped so the captured context stays
+   * comfortably under the OES route's 64 KiB ceiling.
+   */
+  diagnostics?: { enabled?: boolean; hookConsoleError?: boolean };
+
+  // --- v0.2.0: opt-in masked screenshot ---
+  /**
+   * Show the "Attach screenshot" button in the Bug and Feature panels. OFF
+   * unless the user clicks it — nothing is captured and `modern-screenshot` is
+   * never loaded (dynamic import) until then. Before rasterizing, form-field
+   * values and `[data-capture-redact]` elements are masked. When a screenshot
+   * is attached, its Blob is appended to the report FormData as `screenshot`
+   * (a File); the host's `onFileReport` uploads it (the package is
+   * storage-agnostic). Defaults to false.
+   */
+  enableScreenshot?: boolean;
 };

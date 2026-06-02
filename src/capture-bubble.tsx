@@ -16,17 +16,32 @@ import type {
   ExistingTodo,
   ReportKind,
 } from './types';
+import { ensureCaptureStyles } from './styles';
+import {
+  gatherDiagnostics,
+  installErrorCapture,
+  serializeDiagnostics,
+} from './diagnostics';
 
 /**
  * `@overengineered-solutions/capture` — the canonical CaptureBubble shell.
  *
  * One floating bottom-right bubble that opens a tabbed surface for the four
- * capture modes (💬 AI helper / 📝 Todo / 🛠 Bug / 💡 Feature). The shell is
+ * capture modes (AI helper / Todo / Bug / Feature). The shell is
  * adapter-injected and app-agnostic: the report/todo sinks are passed in as
  * `onFileReport` / `onCaptureTodo`, the AI tab is an injected `ReactNode`, and
  * role/flag gating is precomputed into `enabledTabs`. It imports NOTHING
- * relative or app-specific and has zero runtime deps beyond react — the page
+ * relative or app-specific and has zero runtime deps beyond react (the optional
+ * screenshot lib is loaded via dynamic `import()` only on demand). The page
  * context is derived from browser primitives (no `next/navigation`).
+ *
+ * v0.2.0 — SELF-STYLING. The shell injects its own scoped `.oescap-*`
+ * stylesheet at runtime (idempotent, SSR-safe) and reads `--oescap-*` CSS
+ * variables for theming, so it renders pixel-correct with ZERO host Tailwind /
+ * design tokens — safe to mount in `error.tsx` / `global-error.tsx`. The FAB is
+ * an inline chat-bubble SVG on the light-blue OES accent. Bug/Feature reports
+ * auto-stamp a browser + recent-errors diagnostics blob, and an opt-in masked
+ * screenshot can be attached.
  *
  * One component, two surfaces:
  *   - `surface="modal"` (default) — bottom-sheet → centered dialog with a
@@ -35,47 +50,41 @@ import type {
  *     dismiss; the popover replaces the FAB in the corner while open.
  *
  * Both surfaces render the SAME inner tabbed body — no panel duplication.
- *
- * Design tokens (documented in `@overengineered-solutions/capture/theme`):
- * `bg-surface-raised`, `text-ink`, `text-ink-muted`, `border-line`, the
- * `sky-500` friend-blue accent, and the `bubble-grow` keyframe.
  */
 
 // ---------------------------------------------------------------------------
-// Tint tables (lowest-common-denominator base — identical across every fork).
+// Inline icons (no emoji dependence; currentColor so they tint with the CSS).
 // ---------------------------------------------------------------------------
 
-type Tint = 'indigo' | 'orange' | 'red' | 'sky';
+function ChatBubbleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+    </svg>
+  );
+}
 
-const TAB_META: Record<CaptureTabKey, { emoji: string; label: string; tint: Tint }> = {
-  ai: { emoji: '💬', label: 'Chat', tint: 'sky' },
-  todo: { emoji: '📝', label: 'Todo', tint: 'orange' },
-  bug: { emoji: '🛠', label: 'Bug', tint: 'red' },
-  feature: { emoji: '💡', label: 'Feature', tint: 'indigo' },
-};
+type TabTint = 'ai' | 'todo' | 'bug' | 'feature';
 
-const TINT_CLASSES: Record<Tint, { active: string; accent: string }> = {
-  sky: {
-    active: 'border-sky-500 text-sky-700 dark:text-sky-300',
-    accent: 'bg-sky-500 hover:bg-sky-600 text-white',
-  },
-  orange: {
-    active: 'border-orange-500 text-orange-700 dark:text-orange-300',
-    accent: 'bg-orange-500 hover:bg-orange-600 text-white',
-  },
-  red: {
-    active: 'border-red-500 text-red-700 dark:text-red-300',
-    accent: 'bg-red-600 hover:bg-red-700 text-white',
-  },
-  indigo: {
-    active: 'border-indigo-500 text-indigo-700 dark:text-indigo-300',
-    accent: 'bg-indigo-600 hover:bg-indigo-700 text-white',
-  },
+const TAB_META: Record<CaptureTabKey, { label: string; tint: TabTint; icon: ReactNode }> = {
+  ai: { label: 'Chat', tint: 'ai', icon: <ChatBubbleIcon className="oescap-tab__icon" /> },
+  todo: { label: 'Todo', tint: 'todo', icon: <span aria-hidden>📝</span> },
+  bug: { label: 'Bug', tint: 'bug', icon: <span aria-hidden>🛠</span> },
+  feature: { label: 'Feature', tint: 'feature', icon: <span aria-hidden>💡</span> },
 };
 
 // ---------------------------------------------------------------------------
-// Internalized pending-aware submit button (replaces oesolutions's <SubmitButton>
-// import — the package must not depend on @overengineered-solutions/ui).
+// Internalized pending-aware submit button.
 // ---------------------------------------------------------------------------
 
 function PendingSubmitButton({
@@ -101,10 +110,8 @@ function PendingSubmitButton({
 // ---------------------------------------------------------------------------
 // Captured-context derivation (next/navigation-free).
 //
-// The forks read usePathname/useSearchParams/useParams from next/navigation,
-// but this package has no `next` dependency, so we derive the identical shape
-// from window.location. Read lazily on mount (effect) so SSR stays inert and
-// the first client render matches the server's empty snapshot.
+// Derived from window.location. Read lazily on mount (effect) so SSR stays
+// inert and the first client render matches the server's empty snapshot.
 // ---------------------------------------------------------------------------
 
 function useCapturedContext(deployedCommitSha: string | null, kind: ReportKind): CapturedContext {
@@ -159,6 +166,8 @@ export function CaptureBubble({
   todoListHref,
   reportListHref,
   reportSuccessCopy,
+  diagnostics,
+  enableScreenshot,
 }: CaptureBubbleProps) {
   // Defaults.
   const openTodos = existingOpen ?? [];
@@ -167,6 +176,18 @@ export function CaptureBubble({
   const surfaceMode = surface ?? 'modal';
   const isMobile = mobile ?? false;
   const wsId = workspaceId ?? null;
+  const diagEnabled = diagnostics?.enabled !== false;
+  const screenshotEnabled = enableScreenshot ?? false;
+
+  // SELF-STYLING: inject the scoped stylesheet once (idempotent, SSR-safe).
+  // Run in an effect so SSR never touches the DOM; the first paint after
+  // hydration carries the styles. Also installs the error ring buffer.
+  useEffect(() => {
+    ensureCaptureStyles();
+    if (diagEnabled) {
+      installErrorCapture({ hookConsoleError: diagnostics?.hookConsoleError ?? false });
+    }
+  }, [diagEnabled, diagnostics?.hookConsoleError]);
 
   // Visible-tab build from enabledTabs.
   const tabs: CaptureTabKey[] = [];
@@ -226,15 +247,6 @@ export function CaptureBubble({
 
   if (tabs.length === 0) return null;
 
-  const floatEmoji = tabs[0] === 'ai' ? '💬' : '📝';
-  const floatTint: Tint = tabs[0] === 'ai' ? 'sky' : 'orange';
-
-  // FAB position: always-on safe-area inset math; mobile lifts above a bottom
-  // nav into the thumb-zone and drops back to bottom-4 at sm.
-  const fabPosition = isMobile
-    ? 'fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] sm:bottom-4'
-    : 'fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))]';
-
   const fab = (
     <button
       type="button"
@@ -242,44 +254,39 @@ export function CaptureBubble({
       title="Capture / chat"
       aria-label={tabs[0] === 'ai' ? 'Open chat' : 'Open capture and chat menu'}
       aria-haspopup="dialog"
-      className={`${fabPosition} z-40 flex h-12 w-12 items-center justify-center rounded-full text-xl shadow-md transition-all duration-200 ease-out hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-        floatTint === 'sky'
-          ? 'bg-sky-500 ring-sky-500 hover:bg-sky-600'
-          : 'bg-orange-500 ring-orange-500 hover:bg-orange-600'
-      }`}
+      className={`oescap-fab${isMobile ? ' oescap-fab--mobile' : ''}`}
     >
-      <span aria-hidden>{floatEmoji}</span>
+      <ChatBubbleIcon className="oescap-fab__icon" />
     </button>
   );
 
   // The inner tabbed body — shared verbatim by both surfaces (no duplication).
   const body = (
     <>
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-line dark:border-zinc-700">
+      <div className="oescap-tabs">
         {tabs.map((key) => {
           const meta = TAB_META[key];
           // The AI tab can override its label via aiTab.label (OES renders
           // "Hand off" instead of the generic "Chat").
           const label = key === 'ai' && aiTab?.label ? aiTab.label : meta.label;
           const isActive = key === active;
-          const cls = isActive
-            ? `border-b-2 ${TINT_CLASSES[meta.tint].active}`
-            : 'border-b-2 border-transparent text-ink-muted hover:text-ink dark:hover:text-zinc-200';
           return (
             <button
               key={key}
               type="button"
               onClick={() => setActive(key)}
-              className={`flex shrink-0 items-center gap-1 px-3 py-2 text-xs font-semibold uppercase tracking-wide transition-colors ${cls}`}
+              className={`oescap-tab oescap-tab--${meta.tint}${
+                isActive ? ' oescap-tab--active' : ''
+              }`}
             >
-              <span aria-hidden>{meta.emoji}</span>
+              {meta.icon}
               <span>{label}</span>
             </button>
           );
         })}
       </div>
 
-      <div className="mt-3">
+      <div className="oescap-panel-body">
         {active === 'ai' && aiTab ? aiTab.panel : null}
         {active === 'todo' ? (
           <AddTodoPanel
@@ -299,6 +306,8 @@ export function CaptureBubble({
             routeParams={routeParams}
             reportListHref={reportListHref}
             reportSuccessCopy={reportSuccessCopy}
+            diagEnabled={diagEnabled}
+            enableScreenshot={screenshotEnabled}
             onFileReport={onFileReport}
             onClose={() => setOpen(false)}
             onSuccess={(msg) => setToast(msg)}
@@ -312,6 +321,8 @@ export function CaptureBubble({
             routeParams={routeParams}
             reportListHref={reportListHref}
             reportSuccessCopy={reportSuccessCopy}
+            diagEnabled={diagEnabled}
+            enableScreenshot={screenshotEnabled}
             onFileReport={onFileReport}
             onClose={() => setOpen(false)}
             onSuccess={(msg) => setToast(msg)}
@@ -322,12 +333,8 @@ export function CaptureBubble({
   );
 
   return (
-    <>
-      {toast ? (
-        <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))] z-50 max-w-sm rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 shadow">
-          {toast}
-        </div>
-      ) : null}
+    <div className="oescap-root">
+      {toast ? <div className="oescap-toast">{toast}</div> : null}
 
       {surfaceMode === 'popover' ? (
         // Popover: no backdrop, anchored bottom-right, FAB hidden while open
@@ -337,26 +344,23 @@ export function CaptureBubble({
             ref={popoverRef}
             role="dialog"
             aria-modal="false"
-            aria-labelledby="capture-title"
-            className="fixed bottom-4 right-4 z-50 flex max-h-[calc(100vh-4rem)] w-[28rem] max-w-[calc(100vw-2rem)] origin-bottom-right animate-[bubble-grow_180ms_ease-out] flex-col overflow-hidden rounded-lg border border-line bg-surface-raised shadow-xl dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+            aria-labelledby="oescap-title"
+            className="oescap-popover"
           >
-            <div className="flex items-center justify-between border-b border-line px-4 py-3 dark:border-zinc-700">
-              <h2
-                id="capture-title"
-                className="text-sm font-semibold uppercase tracking-wider text-ink-muted"
-              >
+            <div className="oescap-header">
+              <h2 id="oescap-title" className="oescap-title">
                 {heading}
               </h2>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="text-ink-muted hover:text-ink dark:text-zinc-400 dark:hover:text-zinc-100"
+                className="oescap-close"
                 aria-label="Close"
               >
                 ✕
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4">{body}</div>
+            <div className="oescap-body">{body}</div>
           </div>
         ) : (
           fab
@@ -372,7 +376,7 @@ export function CaptureBubble({
           ) : null}
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -441,38 +445,25 @@ function ModalShell({
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end bg-black/50 sm:items-center sm:justify-center"
-      onClick={onClose}
-    >
+    <div className="oescap-backdrop" onClick={onClose}>
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="capture-title"
+        aria-labelledby="oescap-title"
         tabIndex={-1}
-        className={`flex max-h-[90vh] w-full origin-bottom-right animate-[bubble-grow_180ms_ease-out] flex-col overflow-hidden rounded-t-lg bg-surface-raised shadow-xl outline-none sm:max-w-xl sm:rounded-lg dark:bg-zinc-900 dark:text-zinc-100 ${
-          mobile ? 'pb-[env(safe-area-inset-bottom)] sm:pb-0' : ''
-        }`}
+        className={`oescap-panel${mobile ? ' oescap-panel--mobile' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-3 dark:border-zinc-700">
-          <h2
-            id="capture-title"
-            className="text-sm font-semibold uppercase tracking-wider text-ink-muted"
-          >
+        <div className="oescap-header">
+          <h2 id="oescap-title" className="oescap-title">
             {heading}
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-muted hover:text-ink dark:text-zinc-400 dark:hover:text-zinc-100"
-            aria-label="Close"
-          >
+          <button type="button" onClick={onClose} className="oescap-close" aria-label="Close">
             ✕
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">{children}</div>
+        <div className="oescap-body">{children}</div>
       </div>
     </div>
   );
@@ -537,62 +528,51 @@ function AddTodoPanel({
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <form onSubmit={onSubmit} className="space-y-3">
+    <div className="oescap-stack">
+      <form onSubmit={onSubmit} className="oescap-stack">
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           rows={5}
           required
           placeholder="Describe what you want changed. The AI distills your prose into one or more discrete todos; OES can then dispatch a Claude job to fix them."
-          className="w-full rounded border border-line bg-transparent px-2 py-1.5 font-mono text-sm dark:border-zinc-700"
+          className="oescap-textarea"
         />
-        {error ? (
-          <p className="rounded bg-red-50 px-2 py-1 text-xs text-red-800 dark:bg-red-950 dark:text-red-200">
-            {error}
-          </p>
-        ) : null}
-        <div className="flex items-center justify-end gap-2 border-t border-line pt-3 dark:border-zinc-700">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm text-ink-muted hover:text-ink dark:text-zinc-300 dark:hover:text-zinc-100"
-          >
+        {error ? <p className="oescap-error">{error}</p> : null}
+        <div className="oescap-actions">
+          <button type="button" onClick={onClose} className="oescap-btn oescap-btn--ghost">
             Cancel
           </button>
           <PendingSubmitButton
             pending={pending}
             disabled={!message.trim()}
-            className={`rounded px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${TINT_CLASSES.orange.accent}`}
+            className="oescap-btn oescap-btn--todo"
             idleLabel="Distill into todo(s)"
             pendingLabel="Distilling…"
           />
         </div>
       </form>
       {existingOpen.length > 0 ? (
-        <div className="mt-2 border-t border-line pt-3 dark:border-zinc-700">
-          <p className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
+        <div className="oescap-hint">
+          <p className="oescap-hint__head">
             Already open ({existingOpen.length}) — avoid duplicates
           </p>
-          <ul className="mt-2 flex flex-col gap-1">
+          <ul className="oescap-hint__list">
             {existingOpen.map((t) => (
-              <li key={t.id} className="text-xs text-ink-muted dark:text-zinc-300">
-                <span className="font-mono text-[10px] uppercase text-ink-muted">{t.priority}</span>
-                <span className="ml-2">{t.title}</span>
+              <li key={t.id} className="oescap-hint__item">
+                <span className="oescap-hint__pri">{t.priority}</span>
+                <span className="oescap-hint__title">{t.title}</span>
               </li>
             ))}
           </ul>
           {todoListHref ? (
-            <a
-              href={todoListHref}
-              className="mt-2 inline-block text-xs text-ink-muted underline underline-offset-2 hover:text-ink dark:hover:text-zinc-100"
-            >
+            <a href={todoListHref} className="oescap-link">
               Full list →
             </a>
           ) : null}
         </div>
       ) : (
-        <div className="mt-2 border-t border-line pt-3 text-xs text-ink-muted dark:border-zinc-700">
+        <div className="oescap-hint oescap-hint__item">
           No open todos yet — this will be the first.
         </div>
       )}
@@ -604,6 +584,8 @@ function AddTodoPanel({
 // Bug / Feature panel (shared).
 // ---------------------------------------------------------------------------
 
+type AttachedShot = { dataUrl: string; blob: Blob };
+
 function BugOrFeaturePanel({
   kind,
   deployedCommitSha,
@@ -611,6 +593,8 @@ function BugOrFeaturePanel({
   routeParams,
   reportListHref,
   reportSuccessCopy,
+  diagEnabled,
+  enableScreenshot,
   onFileReport,
   onClose,
   onSuccess,
@@ -621,6 +605,8 @@ function BugOrFeaturePanel({
   routeParams?: Record<string, unknown>;
   reportListHref?: string;
   reportSuccessCopy?: (kind: ReportKind) => string;
+  diagEnabled: boolean;
+  enableScreenshot: boolean;
   onFileReport?: (fd: FormData) => Promise<void>;
   onClose: () => void;
   onSuccess: (msg: string) => void;
@@ -629,10 +615,37 @@ function BugOrFeaturePanel({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Screenshot state (opt-in; nothing captured until the user clicks).
+  const [shot, setShot] = useState<AttachedShot | null>(null);
+  const [shotPending, setShotPending] = useState(false);
+  const [shotError, setShotError] = useState<string | null>(null);
+
+  const onAttachScreenshot = () => {
+    setShotError(null);
+    setShotPending(true);
+    void (async () => {
+      try {
+        // Dynamic import: modern-screenshot stays out of the main chunk and is
+        // only fetched the first time a user attaches a shot.
+        const { captureMaskedScreenshot } = await import('./screenshot');
+        const result = await captureMaskedScreenshot();
+        setShot({ dataUrl: result.dataUrl, blob: result.blob });
+      } catch (err) {
+        // Non-fatal: surface inline and let the report send without the shot.
+        setShotError(err instanceof Error ? err.message : 'screenshot failed');
+      } finally {
+        setShotPending(false);
+      }
+    })();
+  };
+
   // Route params (host-injected, since the shell is next-free) populate
   // captured_params.route; workspaceId, when set, is threaded into both the
   // serialized params blob and a hidden input so the host action can scope it.
-  const capturedParams = {
+  // v0.2.0: stamp the diagnostics blob (browser + recentErrors) here too. We
+  // recompute at SUBMIT time (below) so the ring buffer is current, but seed a
+  // hidden input from this render-time value as a fallback.
+  const baseCapturedParams = {
     ...ctx.capturedParams,
     route: routeParams ?? ctx.capturedParams.route,
     ...(workspaceId ? { workspace_id: workspaceId } : {}),
@@ -646,14 +659,40 @@ function BugOrFeaturePanel({
     }
     const form = e.currentTarget;
     const fd = new FormData(form);
+
+    // Recompute captured_params at submit time so recentErrors is current
+    // (errors may have occurred after the panel first rendered). Feature
+    // reports get the same page+browser stamp with recentErrors: [].
+    if (diagEnabled) {
+      try {
+        const diag = gatherDiagnostics({ includeErrors: kind === 'bug' });
+        const params = {
+          ...baseCapturedParams,
+          diagnostics: JSON.parse(serializeDiagnostics(diag)) as unknown,
+        };
+        fd.set('captured_params', JSON.stringify(params));
+      } catch {
+        // Diagnostics are best-effort; never block a report on them.
+      }
+    }
+
+    // Attach the screenshot Blob (if any) as a File on the report FormData.
+    if (shot) {
+      try {
+        const file = new File([shot.blob], 'screenshot.png', { type: 'image/png' });
+        fd.set('screenshot', file);
+      } catch {
+        // If File isn't constructible, append the raw Blob instead.
+        fd.set('screenshot', shot.blob, 'screenshot.png');
+      }
+    }
+
     setError(null);
     setPending(true);
     try {
       await onFileReport(fd);
       const defaultCopy =
-        kind === 'feature'
-          ? 'Feature suggestion filed.'
-          : 'Bug report filed.';
+        kind === 'feature' ? 'Feature suggestion filed.' : 'Bug report filed.';
       onSuccess(reportSuccessCopy ? reportSuccessCopy(kind) : defaultCopy);
       onClose();
     } catch (err) {
@@ -667,70 +706,99 @@ function BugOrFeaturePanel({
     kind === 'feature'
       ? 'What feature would you like? Describe the user-facing behavior, not the implementation.'
       : "What's wrong or what should change? Steps to reproduce, acceptance criteria.";
-  const tint: Tint = kind === 'feature' ? 'indigo' : 'red';
+  const btnTint = kind === 'feature' ? 'oescap-btn--feature' : 'oescap-btn--bug';
 
   return (
-    <form onSubmit={onSubmit} className="space-y-3">
-      <div className="rounded border border-line bg-surface-raised p-2 font-mono text-xs text-ink-muted dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
-        <div>Route: {ctx.capturedRoute}</div>
+    <form onSubmit={onSubmit} className="oescap-stack">
+      <div className="oescap-context">
+        <div>Route: {ctx.capturedRoute || '/'}</div>
         {deployedCommitSha ? <div>Deploy: {deployedCommitSha.slice(0, 7)}</div> : null}
+        {diagEnabled ? (
+          <div>Diagnostics: browser + recent errors auto-attached</div>
+        ) : null}
         {reportListHref ? (
-          <div className="text-ink-muted">
+          <div>
             Filed as a raw report. Distill into todos at <code>{reportListHref}</code>.
           </div>
         ) : null}
       </div>
 
-      <div>
-        <label className="block text-xs font-medium text-ink-muted dark:text-zinc-300">Title</label>
+      <div className="oescap-field">
+        <label className="oescap-label">Title</label>
         <input
           name="title"
           required
           maxLength={200}
           placeholder="Short summary"
           autoFocus
-          className="mt-1 w-full rounded border border-line bg-transparent px-2 py-1.5 text-sm dark:border-zinc-700"
+          className="oescap-input"
         />
       </div>
 
-      <div>
-        <label className="block text-xs font-medium text-ink-muted dark:text-zinc-300">
-          Description
-        </label>
+      <div className="oescap-field">
+        <label className="oescap-label">Description</label>
         <textarea
           name="description"
           required
           rows={5}
           maxLength={10_000}
           placeholder={placeholder}
-          className="mt-1 w-full rounded border border-line bg-transparent px-2 py-1.5 font-mono text-sm dark:border-zinc-700"
+          className="oescap-textarea"
         />
       </div>
+
+      {enableScreenshot ? (
+        <div className="oescap-shot">
+          {shot ? (
+            <div className="oescap-shot__preview">
+              <img
+                src={shot.dataUrl}
+                alt="Captured screenshot preview"
+                className="oescap-shot__thumb"
+              />
+              <button
+                type="button"
+                onClick={() => setShot(null)}
+                className="oescap-shot__remove"
+                aria-label="Remove screenshot"
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onAttachScreenshot}
+              disabled={shotPending}
+              className="oescap-btn oescap-shot__btn"
+            >
+              {shotPending ? 'Capturing…' : 'Attach screenshot'}
+            </button>
+          )}
+          <p className="oescap-shot__hint">
+            Form fields are masked before capture. Mark extra elements with{' '}
+            <code>data-capture-redact</code>.
+          </p>
+          {shotError ? <p className="oescap-shot__err">Screenshot failed: {shotError}</p> : null}
+        </div>
+      ) : null}
 
       <input type="hidden" name="kind" value={kind} />
       <input type="hidden" name="captured_route" value={ctx.capturedRoute} />
       <input type="hidden" name="captured_url" value={ctx.capturedUrl} />
-      <input type="hidden" name="captured_params" value={JSON.stringify(capturedParams)} />
+      <input type="hidden" name="captured_params" value={JSON.stringify(baseCapturedParams)} />
       <input type="hidden" name="captured_commit_sha" value={ctx.capturedCommitSha} />
       {workspaceId ? <input type="hidden" name="workspace_id" value={workspaceId} /> : null}
 
-      {error ? (
-        <p className="rounded bg-red-50 px-2 py-1 text-xs text-red-800 dark:bg-red-950 dark:text-red-200">
-          {error}
-        </p>
-      ) : null}
+      {error ? <p className="oescap-error">{error}</p> : null}
 
-      <div className="flex items-center justify-end gap-2 border-t border-line pt-3 dark:border-zinc-700">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-sm text-ink-muted hover:text-ink dark:text-zinc-300 dark:hover:text-zinc-100"
-        >
+      <div className="oescap-actions">
+        <button type="button" onClick={onClose} className="oescap-btn oescap-btn--ghost">
           Cancel
         </button>
         <PendingSubmitButton
           pending={pending}
-          className={`rounded px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${TINT_CLASSES[tint].accent}`}
+          className={`oescap-btn ${btnTint}`}
           idleLabel={submitLabel}
           pendingLabel="Filing…"
         />

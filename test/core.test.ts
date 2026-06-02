@@ -10,7 +10,13 @@ import {
   BUG_REPORTS_TABLE_SQL,
   TODOS_TABLE_SQL,
 } from '../src/migrations';
-import { CAPTURE_DESIGN_TOKENS, captureThemeCss } from '../src/theme';
+import {
+  CAPTURE_DESIGN_TOKENS,
+  captureThemeCss,
+  CAPTURE_THEME_VARS,
+  CAPTURE_STYLES_CSS,
+  CAPTURE_THEME_DEFAULTS_CSS,
+} from '../src/theme';
 
 describe('toOesFeedbackKind', () => {
   it('maps the shell "feature" to OES "idea", everything else to "bug"', () => {
@@ -148,8 +154,21 @@ describe('migrations + theme exports', () => {
     expect(CAPTURE_LOCAL_MIRROR_SQL).toContain('set_updated_at');
   });
 
-  it('document the design-token contract', () => {
+  it('document the design-token contract (legacy back-compat exports)', () => {
+    // v0.1.x consumers imported these; retained so a bump doesn't break a build.
     expect(CAPTURE_DESIGN_TOKENS).toContain('bg-surface-raised');
-    expect(captureThemeCss).toContain('--color-accent');
+    // captureThemeCss now seeds the --oescap-* defaults instead of Tailwind tokens.
+    expect(captureThemeCss).toContain('--oescap-accent');
+  });
+
+  it('ships the CSS-var theming contract (v0.2.0 SSOT)', () => {
+    // The light-blue accent default IS the OES look.
+    expect(CAPTURE_THEME_VARS['--oescap-accent']).toBe('#38bdf8');
+    expect(CAPTURE_THEME_VARS['--oescap-accent-contrast']).toBeTruthy();
+    // The injected stylesheet bakes in the defaults + the FAB + the redaction rule.
+    expect(CAPTURE_THEME_DEFAULTS_CSS).toContain('--oescap-accent: #38bdf8');
+    expect(CAPTURE_STYLES_CSS).toContain('.oescap-fab');
+    expect(CAPTURE_STYLES_CSS).toContain('@keyframes oescap-bubble-grow');
+    expect(CAPTURE_STYLES_CSS).toContain('.oescap-redacting');
   });
 });
