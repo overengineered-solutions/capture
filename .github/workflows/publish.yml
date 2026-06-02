@@ -1,0 +1,64 @@
+name: Publish @overengineered-solutions/capture
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run typecheck + build + test + pack without publishing
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: read
+  # id-token: write is required for npm provenance attestation
+  # (Sigstore-backed signature linking the published artifact to this exact
+  # workflow run + commit). https://docs.npmjs.com/generating-provenance-statements
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --no-frozen-lockfile
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          tag_version="${TAG_NAME#v}"
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "tag ($tag_version) does not match package.json version ($pkg_version)" >&2
+            exit 1
+          fi
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Test
+        run: pnpm test
+      - name: Pack (verify tarball contents)
+        run: |
+          pnpm pack --pack-destination ./
+          ls -la *.tgz
+          echo "--- tarball contents ---"
+          tar -tzf *.tgz | head -60
+      - name: Publish to npmjs with provenance
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.dry_run == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --no-git-checks --access public --provenance

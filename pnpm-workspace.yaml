@@ -1,0 +1,14 @@
+# Single-package repo (no `packages:` globs needed). pnpm 11+ reads the
+# build-script allowlist from this workspace file (it moved out of
+# package.json's `pnpm.onlyBuiltDependencies` in v11). `true` approves a
+# package's install script to run; anything not listed has its install
+# scripts blocked by default — pnpm 11's supply-chain hardening.
+#
+# Approvals:
+#   esbuild — vitest's native transformer. Its postinstall creates the
+#             top-level `esbuild` bin shim that vitest invokes; without
+#             approval `pnpm test` can't resolve esbuild.
+#
+# Add new trusted packages here explicitly.
+allowBuilds:
+  esbuild: true

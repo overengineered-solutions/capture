@@ -1,0 +1,98 @@
+{
+  "name": "@overengineered-solutions/capture",
+  "version": "0.1.0",
+  "description": "The standardized CaptureBubble — the bottom-right feedback/helper widget (AI helper · AI-distilled todo · bug report · feature request) as one adapter-injected SSOT, collapsing the portfolio's copy-paste forks into a version-bumped package",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./core": {
+      "import": {
+        "types": "./dist/esm/core.d.ts",
+        "default": "./dist/esm/core.js"
+      },
+      "require": {
+        "types": "./dist/cjs/core.d.ts",
+        "default": "./dist/cjs/core.js"
+      }
+    },
+    "./migrations": {
+      "import": {
+        "types": "./dist/esm/migrations.d.ts",
+        "default": "./dist/esm/migrations.js"
+      },
+      "require": {
+        "types": "./dist/cjs/migrations.d.ts",
+        "default": "./dist/cjs/migrations.js"
+      }
+    },
+    "./theme": {
+      "import": {
+        "types": "./dist/esm/theme.d.ts",
+        "default": "./dist/esm/theme.js"
+      },
+      "require": {
+        "types": "./dist/cjs/theme.d.ts",
+        "default": "./dist/cjs/theme.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "pnpm run build:esm && pnpm run build:cjs && node scripts/post-build.mjs",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.cjs.tsbuildinfo",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "prepack": "pnpm run clean && pnpm run build",
+    "prepublishOnly": "pnpm run clean && pnpm run build"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/overengineered-solutions/capture.git"
+  },
+  "homepage": "https://github.com/overengineered-solutions/capture#readme",
+  "bugs": {
+    "url": "https://github.com/overengineered-solutions/capture/issues"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": false },
+    "react-dom": { "optional": false }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.29",
+    "@types/react-dom": "^19.2.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

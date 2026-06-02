@@ -1,0 +1,1 @@
+v0.1.0 — 2026-06-01 — initial publish. Adapter-injected `CaptureBubble` shell (modal + popover surfaces, makeros focus-trap a11y, primopicks role-gating contract, oelm mobile/safe-area), the `./core` central-OES feedback sink client + distiller interface, `./migrations` canonical local-mirror SQL, and the `./theme` design-token contract.
